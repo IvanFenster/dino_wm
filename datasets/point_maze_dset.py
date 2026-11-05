@@ -10,6 +10,7 @@ from typing import Optional, Callable, Any
 decord.bridge.set_bridge("torch")
 
 class PointMazeDataset(TrajDataset):
+    supports_partial_frames = True  # [ARPL-WM patch] used by TrajSlicerDataset fast path
     def __init__(
         self,
         data_path: str = "data/point_maze",
@@ -81,7 +82,11 @@ class PointMazeDataset(TrajDataset):
 
     def get_frames(self, idx, frames):
         obs_dir = self.data_path / "obses"
-        image = torch.load(obs_dir / f"episode_{idx:03d}.pth")
+        # [ARPL-WM patch] memory-map the episode file so only the requested frames are read from disk
+        try:
+            image = torch.load(obs_dir / f"episode_{idx:03d}.pth", mmap=True)
+        except Exception:
+            image = torch.load(obs_dir / f"episode_{idx:03d}.pth")
         proprio = self.proprios[idx, frames]
         act = self.actions[idx, frames]
         state = self.states[idx, frames]
