@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 from einops import rearrange, repeat
@@ -104,13 +105,17 @@ class CEMPlanner(BasePlanner):
                     + mu[traj]
                 )
                 action[0] = mu[traj]  # optional: make the first one mu itself
+                # [ARPL-WM patch] imagine the candidate plans in chunks so attention fits a 15 GB GPU.
+                # Each plan is imagined independently, so this equals one big batch (paper settings unchanged).
+                _chunk = int(os.environ.get("ARPL_CEM_CHUNK", "50"))
+                _losses = []
                 with torch.no_grad():
-                    i_z_obses, i_zs = self.wm.rollout(
-                        obs_0=cur_trans_obs_0,
-                        act=action,
-                    )
-
-                loss = self.objective_fn(i_z_obses, cur_z_obs_g)
+                    for _s in range(0, self.num_samples, _chunk):
+                        _o = {k: v[_s:_s + _chunk] for k, v in cur_trans_obs_0.items()}
+                        _g = {k: v[_s:_s + _chunk] for k, v in cur_z_obs_g.items()}
+                        _z, _ = self.wm.rollout(obs_0=_o, act=action[_s:_s + _chunk])
+                        _losses.append(self.objective_fn(_z, _g))
+                loss = torch.cat(_losses)
                 topk_idx = torch.argsort(loss)[: self.topk]
                 topk_action = action[topk_idx]
                 losses.append(loss[topk_idx[0]].item())
