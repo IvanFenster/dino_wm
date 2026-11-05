@@ -534,6 +534,7 @@ class Trainer:
             loss_components = {f"train_{k}": [v] for k, v in loss_components.items()}
             self.logs_update(loss_components)
 
+    @torch.no_grad()  # [ARPL-WM patch] validation never calls backward; without this it ran out of GPU memory on a 15 GB T4
     def val(self):
         self.model.eval()
         if len(self.train_traj_dset) > 0 and self.cfg.has_predictor:
