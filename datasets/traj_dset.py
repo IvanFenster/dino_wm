@@ -93,7 +93,7 @@ class TrajSlicerDataset(TrajDataset):
         i, start, end = self.slices[idx]
         # [ARPL-WM patch] fast path: load only the frames this slice uses (same output as below)
         base, bi = self.dataset, int(i)
-        if isinstance(base, TrajSubset):
+        while isinstance(base, TrajSubset):  # [ARPL-WM patch v2] unwrap nested subsets too
             bi, base = int(base.indices[bi]), base.dataset
         if getattr(base, "supports_partial_frames", False):
             obs, _, state, _ = base.get_frames(bi, list(range(int(start), int(end), self.frameskip)))
