@@ -13,6 +13,7 @@ STATE_MEAN = torch.tensor([0.7518, 0.9239, -3.9702e-05, 3.1550e-04])
 STATE_STD = torch.tensor([1.0964, 1.2390, 1.3819, 1.5407])
 
 class WallDataset(TrajDataset):
+    supports_partial_frames = True  # [ARPL-WM patch] used by TrajSlicerDataset fast path
     def __init__(
         self,
         data_path: str = "data/wall_single",
@@ -80,7 +81,11 @@ class WallDataset(TrajDataset):
 
     def get_frames(self, idx, frames):
         obs_dir = self.data_path / "obses"
-        image = torch.load(obs_dir / f"episode_{idx:03d}.pth")
+        # [ARPL-WM patch] memory-map the episode file so only the requested frames are read from disk
+        try:
+            image = torch.load(obs_dir / f"episode_{idx:03d}.pth", mmap=True)
+        except Exception:
+            image = torch.load(obs_dir / f"episode_{idx:03d}.pth")
         act = self.actions[idx, frames]
         state = self.states[idx, frames]
         proprio = self.proprios[idx, frames]
