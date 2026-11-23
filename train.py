@@ -757,6 +757,13 @@ class Trainer:
         log.info(f"Epoch {self.epoch}  Training loss: {epoch_log['train_loss']:.4f}  \
                 Validation loss: {epoch_log['val_loss']:.4f}")
 
+        if self.accelerator.is_main_process:  # [ARPL-WM patch] epochlog: one line per epoch, file closed immediately
+            _new_file = not os.path.exists("epoch_losses.csv")
+            with open("epoch_losses.csv", "a") as _fh:
+                if _new_file:
+                    _fh.write(",".join(epoch_log.keys()) + "\n")
+                _fh.write(",".join(f"{float(v):.6f}" for v in epoch_log.values()) + "\n")
+                _fh.flush(); os.fsync(_fh.fileno())
         if self.accelerator.is_main_process:
             self.wandb_run.log(epoch_log)
         self.epoch_log = OrderedDict()
