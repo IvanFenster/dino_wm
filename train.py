@@ -12,6 +12,13 @@ from tqdm import tqdm
 from omegaconf import OmegaConf, open_dict
 from einops import rearrange
 from accelerate import Accelerator
+# [ARPL-WM patch] fp16: optional mixed precision for the training step only (ARPL_AMP=1). Validation stays fp32.
+_ARPL_AMP = os.environ.get("ARPL_AMP", "0") == "1"
+def _arpl_opt_step(trainer, opt):
+    if _ARPL_AMP:
+        trainer._arpl_scaler.step(getattr(opt, "optimizer", opt))
+    else:
+        opt.step()
 from torchvision import utils
 import torch.distributed as dist
 from pathlib import Path
@@ -440,15 +447,19 @@ class Trainer:
         return logs
 
     def train(self):
+        if _ARPL_AMP and not hasattr(self, "_arpl_scaler"):  # [ARPL-WM patch] fp16
+            self._arpl_scaler = torch.cuda.amp.GradScaler()
+            log.info("[ARPL-WM] fp16 mixed precision ON for training")
         for i, data in enumerate(
             tqdm(self.dataloaders["train"], desc=f"Epoch {self.epoch} Train")
         ):
             obs, act, state = data
             plot = i == 0  # only plot from the first batch
             self.model.train()
-            z_out, visual_out, visual_reconstructed, loss, loss_components = self.model(
-                obs, act
-            )
+            with torch.autocast("cuda", dtype=torch.float16, enabled=_ARPL_AMP):  # [ARPL-WM patch] fp16
+                z_out, visual_out, visual_reconstructed, loss, loss_components = self.model(
+                    obs, act
+                )
 
             self.encoder_optimizer.zero_grad()
             if self.cfg.has_decoder:
@@ -457,15 +468,20 @@ class Trainer:
                 self.predictor_optimizer.zero_grad()
                 self.action_encoder_optimizer.zero_grad()
 
-            self.accelerator.backward(loss)
+            if _ARPL_AMP:  # [ARPL-WM patch] fp16: scaled backward, so small fp16 gradients don't round to zero
+                self._arpl_scaler.scale(loss).backward()
+            else:
+                self.accelerator.backward(loss)
 
             if self.model.train_encoder:
-                self.encoder_optimizer.step()
+                _arpl_opt_step(self, self.encoder_optimizer)
             if self.cfg.has_decoder and self.model.train_decoder:
-                self.decoder_optimizer.step()
+                _arpl_opt_step(self, self.decoder_optimizer)
             if self.cfg.has_predictor and self.model.train_predictor:
-                self.predictor_optimizer.step()
-                self.action_encoder_optimizer.step()
+                _arpl_opt_step(self, self.predictor_optimizer)
+                _arpl_opt_step(self, self.action_encoder_optimizer)
+            if _ARPL_AMP:
+                self._arpl_scaler.update()
 
             loss = self.accelerator.gather_for_metrics(loss).mean()
 
