@@ -1,19 +1,24 @@
-# [ARPL-WM] Session logger. Runs in the background next to training and saves to Drive every minute:
+# [ARPL-WM] Session logger. Runs in the background next to training and saves every minute:
 #   logs/<run>/sessions.csv              one row per session: start, GPU, settings, epoch it resumed from
 #   logs/<run>/epoch_timing.csv          one row per finished epoch: train/val minutes, speed, save time
 #   logs/<run>/gpu_<session>.csv         GPU use, memory, temperature, power every minute
 #   logs/<run>/session_<session>_stdout.log   full training output
-# Usage: python3 arpl_logger.py <run_name> <stdout_log> [session_id]. Starting it again replaces the old one.
+# Usage: python3 arpl_logger.py <run_name> <stdout_log> [session_id] [pid_to_watch]
+#   Starting it again for the same run on the same machine replaces the old one.
+#   With pid_to_watch (e.g. the training process in a Slurm job), it writes one last time and exits when that process ends.
+# Paths: $WM/logs/<run> and $WM/outputs/<run>/checkpoints, or set ARPL_LOG_DIR / ARPL_CKPT_DIR directly.
 import os, re, sys, time, signal, shutil, subprocess, datetime as dt
 
 run, src = sys.argv[1], sys.argv[2]
-sid = sys.argv[3] if len(sys.argv) > 3 else os.environ.get("ARPL_SESSION") or time.strftime("%Y%m%d_%H%M", time.gmtime())
+sid = (sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None) or os.environ.get("ARPL_SESSION") or time.strftime("%Y%m%d_%H%M", time.gmtime())
+watch = int(sys.argv[4]) if len(sys.argv) > 4 else None
 WM = os.environ.get("WM", "/content/drive/MyDrive/ARPL-WM")
-out = f"{WM}/logs/{run}"
-ckdir = f"{WM}/outputs/{run}/checkpoints"
+REPO = os.environ.get("ARPL_REPO", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root (this file is in scripts/)
+out = os.environ.get("ARPL_LOG_DIR", f"{WM}/logs/{run}")
+ckdir = os.environ.get("ARPL_CKPT_DIR", f"{WM}/outputs/{run}/checkpoints")
 os.makedirs(out, exist_ok=True)
 
-pidfile = "/tmp/arpl_logger.pid"
+pidfile = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"arpl_logger_{run}.pid")  # one logger per run per machine
 try:
     old = int(open(pidfile).read())
     if old != os.getpid():
@@ -48,6 +53,14 @@ def saved_epochs():
     except Exception:
         return []
 
+def alive(pid):
+    try:
+        os.kill(pid, 0); return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
 def minutes(s):  # tqdm "47:46" or "1:02:03"
     p = [int(x) for x in s.split(":")]
     sec = p[-1] + 60 * p[-2] + (3600 * p[-3] if len(p) == 3 else 0)
@@ -59,13 +72,15 @@ if not any(r.split(",")[0] == sid for r in rows(f"{out}/sessions.csv")):
     said = re.findall(r"Resuming from epoch (\d+)", open(src, errors="ignore").read()) if os.path.exists(src) else []
     done = [int(said[-1])] if said else saved_epochs()
     append(f"{out}/sessions.csv",
-           "session,logger_start_utc,gpu,resumed_from_epoch,epochs_this_session,batch,amp_fp16,sdpa,resume_fix_in_train_py,host",
+           "session,logger_start_utc,gpu,resumed_from_epoch,epochs_this_session,batch,amp_fp16,sdpa,resume_fix_in_train_py,host,git_commit,slurm_job",
            ",".join([sid, utc(), gpu.replace(",", " /"), str(max(done, default=0)), os.environ.get("ARPL_EPOCHS", "?"),
                      os.environ.get("ARPL_BATCH", "?"), os.environ.get("ARPL_AMP", "?"), os.environ.get("ARPL_SDPA", "?"),
-                     str("[ARPL-WM patch] resume" in open(f"{WM}/dino_wm/train.py").read()), sh("hostname")]))
+                     str("[ARPL-WM patch] resume" in open(f"{REPO}/train.py").read()), sh("hostname"),
+                     sh(f"git -C {REPO} rev-parse --short HEAD") + ("+dirty" if sh(f"git -C {REPO} status --porcelain --untracked-files=no") else ""),
+                     os.environ.get("SLURM_JOB_ID", "")]))
 
 TS = r"\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),\d+\]"
-while True:
+def log_once():
     try:
         if os.path.exists(src):  # 1. full output
             tmp = f"{out}/.session_{sid}_stdout.tmp"
@@ -100,4 +115,9 @@ while True:
                              f"{minutes(v[-1]):.1f}" if v else "", steps, f"{ips:.2f}", tr, va, gpu.split(",")[0]]))
     except Exception as e:
         append(f"{out}/logger_errors.txt", "time_utc,error", f"{utc()},{e!r}")
+
+while True:
+    log_once()
+    if watch is not None and not alive(watch):  # training ended: final pass already written above
+        break
     time.sleep(60)
