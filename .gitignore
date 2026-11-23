@@ -3,3 +3,8 @@ __pycache__
 outputs
 plan_outputs
 *.orig
+slurm/logs/*
+!slurm/logs/.gitkeep
+wandb/
+*.pth
+.ipynb_checkpoints/
