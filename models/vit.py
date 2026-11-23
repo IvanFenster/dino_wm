@@ -1,4 +1,5 @@
 # adapted from https://github.com/lucidrains/vit-pytorch/blob/main/vit_pytorch/vit.py
+import os
 import torch
 from torch import nn
 from einops import rearrange, repeat
@@ -68,14 +69,22 @@ class Attention(nn.Module):
         qkv = self.to_qkv(x).chunk(3, dim = -1)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = self.heads), qkv)
 
-        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
-        # apply causal mask
-        dots = dots.masked_fill(self.bias[:, :, :T, :T] == 0, float("-inf"))
+        if os.environ.get("ARPL_SDPA", "0") == "1":  # [ARPL-WM patch] sdpa: same math in one fused kernel
+            out = torch.nn.functional.scaled_dot_product_attention(
+                q, k, v,
+                attn_mask=(self.bias[:, :, :T, :T] != 0),  # True = may attend (same causal frame mask)
+                dropout_p=self.dropout.p if self.training else 0.0,
+                scale=self.scale,
+            )
+        else:
+            dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+            # apply causal mask
+            dots = dots.masked_fill(self.bias[:, :, :T, :T] == 0, float("-inf"))
 
-        attn = self.attend(dots)
-        attn = self.dropout(attn)
+            attn = self.attend(dots)
+            attn = self.dropout(attn)
 
-        out = torch.matmul(attn, v)
+            out = torch.matmul(attn, v)
         out = rearrange(out, 'b h n d -> b n (h d)')
         return self.to_out(out)
 
