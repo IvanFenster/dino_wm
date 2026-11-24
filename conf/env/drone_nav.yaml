@@ -1,0 +1,22 @@
+# [ARPL-WM] Genesis drone navigation dataset (drone_sim/, datasets/drone_dset.py). New for this fork.
+# Training works now; planning needs a DINO-WM env wrapper for the drone, which does not exist yet.
+name: drone_nav
+args: []
+kwargs: {}
+
+dataset:
+  _target_: "datasets.drone_dset.load_drone_slice_train_val"
+  n_rollout: null
+  normalize_action: ${normalize_action}
+  data_path: ${oc.env:DATASET_DIR}/drone_nav
+  split_ratio: 0.9
+  return_depth: false        # true adds obs["depth"] (meters) for the depth/DeFM experiments
+  depth_size: ${img_size}
+  proprio_mode: full         # full | no_position | velocity
+  val_rooms: null            # e.g. [8, 9] to validate on rooms never seen in training
+  transform:
+    _target_: "datasets.img_transforms.default_transform"
+    img_size: ${img_size}
+
+decoder_path: null
+num_workers: 8

@@ -1,0 +1,21 @@
+# [ARPL-WM] Conda env for Genesis drone data collection (separate from the dino_wm env, which is
+# Python 3.9; Genesis needs Python >= 3.10). Created by setup/drone_setup.sh at
+# $ARPL_SCRATCH/conda/drone_env. Genesis is pinned to the commit transport-world uses
+# (same as the Colab notebook). torch: CUDA 12.1 wheels, check `nvidia-smi` driver >= 530.
+name: drone_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - ffmpeg
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu121
+      - torch==2.5.1
+      - torchvision==0.20.1
+      - matplotlib
+      - imageio[ffmpeg]
+      - einops
+      - tqdm
+      - ipykernel
+      - "genesis-world @ git+https://github.com/Genesis-Embodied-AI/genesis-world.git@34fd709c6381d76587a7867f7a66ec9b14cfed0e"

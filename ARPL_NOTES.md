@@ -77,6 +77,33 @@ fp16 plus fused attention together gave about 3x per epoch in the real PointMaze
 
 The pipeline works end to end, but training had barely started (every variant is still worse than copying the current frame), so there is no conclusion about depth yet.
 
+## Drone navigation dataset (Genesis)
+
+Planned start-to-goal flights in the Genesis room from the Colab "Drone environment" notebook, recorded as RGB, depth, state and actions for DINO-WM (and later LeWM). Runs in its own conda env (`setup/drone_env.yaml`, Python 3.11), because Genesis needs Python 3.10 or newer and the dino_wm env is 3.9.
+
+| Piece | File |
+|---|---|
+| Room layout (configurable size, pillars, extra boxes; seed 0 = the Colab arena) | `drone_sim/room.py` |
+| Start/goal sampling, A* on the floor plan, shortcutting | `drone_sim/planner.py` |
+| Path follower that outputs `[forward, left, up, yaw_rate]` | `drone_sim/follower.py` |
+| Genesis env, ported from Colab with the same control loop, plus collision check | `drone_sim/env.py` |
+| GPU (EGL) rendering fix for headless nodes | `drone_sim/egl.py` |
+| Episode runner, raw `.npz` writer, packer into the DINO-WM layout | `drone_sim/collect.py` |
+| Loader (optional depth, proprio subsets, held-out rooms) and config | `datasets/drone_dset.py`, `conf/env/drone_nav.yaml` |
+| Notebook for setup and the first trajectories | `notebooks/drone/drone_collect.ipynb` |
+| Batch collection, one Slurm array task per room | `scripts/drone/collect.py`, `slurm/drone_collect.sbatch` |
+
+```bash
+bash setup/drone_setup.sh                                  # once, inside a short GPU job (needs transport-world access)
+sbatch --array=0-0 slurm/drone_collect.sbatch               # 1 room x 10 episodes
+EPISODES=200 sbatch --array=0-9 slurm/drone_collect.sbatch  # 10 rooms x 200 episodes
+python scripts/drone/collect.py --pack --out $WM/data/drone_raw --dset $WM/data/drone_nav
+```
+
+Each episode file holds `rgb (T+1,S,S,3) uint8`, `depth (T+1,S,S) float16 meters`, `state (T+1,13)` (position, quaternion wxyz, linear and angular velocity), `action (T,4)`, per-step collision flags and clearance, the planned path and a JSON `meta` (start, goal, room, all configs, outcome, timing). Every job also writes a `.jsonl` log per room plus the usual `run_*.txt`.
+
+Checked before the first Savio run (cloud CPU machine, no GPU): planner, follower and writer on a kinematic stand-in with the Colab-measured velocity gains (30 of 30 episodes in 3 rooms reached the goal, closest approach 0.44 m), the packer, and the loader (shapes, held-out rooms, partial-frame reads equal full reads). With Genesis at the pinned commit (1.2.1) on CPU, `drone_sim/env.py` built the room, rendered RGB and depth from the attached camera, ran a short episode and packed it, using a stand-in controller because transport-world is private; `get_contacts` exists in that version and reported contacts against a pillar. Not run yet: the real SE(3) controller, GPU rendering on Savio, the notebook and the sbatch file.
+
 ## Not verified yet on Savio
 
 `scripts/val_ckpt.py` was verified on Colab: with the resume fix it reproduces epoch 3's 0.0090 (and recomputed the unlogged epoch 2 as 0.0104). Before the fix it gave 0.0749, because reloading replaced the action and proprio encoders with random ones; that is how the resume bug was found.
@@ -95,4 +122,5 @@ The pipeline works end to end, but training had barely started (every variant is
 - DINO-WM model, training, planning and environments: upstream [gaoyuezhou/dino_wm](https://github.com/gaoyuezhou/dino_wm).
 - DINOv2: [facebookresearch/dinov2](https://github.com/facebookresearch/dinov2); weights via Hugging Face `facebook/dinov2-small`.
 - DeFM depth encoder: [leggedrobotics/defm](https://github.com/leggedrobotics/defm).
-- Everything marked "new" above: written for this fork at ARPL.
+- Genesis drone simulation: [Genesis-Embodied-AI/genesis-world](https://github.com/Genesis-Embodied-AI/genesis-world) (physics, rendering, drone model, camera). SE(3) controller, race2 drone config and timing: JoonHo Lee's transport-world (private).
+- Everything marked "new" above, and `drone_sim/`: written for this fork at ARPL.
