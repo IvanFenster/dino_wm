@@ -6,9 +6,18 @@ on the CPU without any error (about 1.6 s per frame instead of milliseconds). Th
 so we write the same vendor file into our own cache folder and point
 __EGL_VENDOR_LIBRARY_FILENAMES at it (libglvnd reads that variable). Must run before Genesis
 (or pyrender / PyOpenGL) is first imported in the process.
+
+Second problem, seen on Savio (2026-11-24): conda-forge installs its own libglvnd (libGL,
+libGLX, libGLdispatch, libEGL 1.7.0) into the env. The process then mixed the system libEGL with
+conda's libGLdispatch: the EGL context was created, but every GL call returned nothing
+(glGetString(GL_RENDERER) was None) and the first Genesis render segfaulted. Loading the
+system's glvnd libraries first, by full path, makes every later load by name reuse them (the
+dynamic loader matches already-loaded libraries by soname). With that, the same check printed
+"NVIDIA GeForce RTX 2080 Ti/PCIe/SSE2".
 """
 from __future__ import annotations
 
+import ctypes
 import glob
 import os
 
@@ -38,6 +47,13 @@ def setup_gpu_rendering(cache_dir: str | None = None, verbose: bool = True) -> s
     with open(vendor, "w") as f:
         f.write('{"file_format_version": "1.0.0", "ICD": {"library_path": "%s"}}\n' % lib)
     os.environ["__EGL_VENDOR_LIBRARY_FILENAMES"] = vendor
+    sysdir = os.path.dirname(lib)
+    loaded = []
+    for name in ("libGLdispatch.so.0", "libOpenGL.so.0", "libGL.so.1", "libGLX.so.0", "libEGL.so.1"):
+        path = os.path.join(sysdir, name)
+        if os.path.exists(path):
+            ctypes.CDLL(path, mode=ctypes.RTLD_GLOBAL)
+            loaded.append(name)
     if verbose:
-        print(f"[egl] using {lib} via {vendor}")
+        print(f"[egl] using {lib} via {vendor}; system glvnd preloaded: {', '.join(loaded) or 'none'}")
     return lib

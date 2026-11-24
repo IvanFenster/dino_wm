@@ -8,7 +8,6 @@ channels:
 dependencies:
   - python=3.11
   - pip
-  - ffmpeg
   - pip:
       - --extra-index-url https://download.pytorch.org/whl/cu121
       - torch==2.5.1
