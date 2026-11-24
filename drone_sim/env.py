@@ -62,7 +62,7 @@ class DroneFPVEnv:
         action_scale: float = 1.0,
         yaw_rate_scale: float = 1.0,
         rpm_tau: float = 0.43,       # motor lag, same value as transport-world
-        max_depth: float = 20.0,
+        max_depth: float = 100.0,     # DeFM C1 channel covers 0 to 100 m (log scale); clipping lower loses it
         collision_radius: float = 0.2,   # drone counted as touching a box closer than this, m
         keep_frames: bool = False,
     ):
@@ -91,7 +91,8 @@ class DroneFPVEnv:
             file=self.race2.urdf, model=self.race2.model, propellers_spin=self.race2.propellers_spin,
             convexify=True, decimate=False, pos=(0.0, 0.0, z0)))
         self.camera = self.scene.add_camera(res=(image_size, image_size), pos=(0.0, 0.0, z0),
-                                            lookat=(1.0, 0.0, z0), fov=fov, GUI=False)
+                                            lookat=(1.0, 0.0, z0), fov=fov, GUI=False,
+                                            near=0.05, far=max_depth)   # Genesis default far is 20 m
         self.scene.build()
 
         offset = np.eye(4)

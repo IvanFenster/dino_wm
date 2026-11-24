@@ -3,7 +3,7 @@
 Raw format (one file per episode, written while collecting, safe to run many jobs in parallel):
     <out>/raw/room<R>_ep<E>.npz
         rgb     uint8   (T+1, S, S, 3)
-        depth   float16 (T+1, S, S)   meters, clipped to max_depth
+        depth   float16 (T+1, S, S)   meters, clipped to max_depth (100 m default, as DeFM)
         state   float32 (T+1, 13)     position, quaternion wxyz, linear vel, angular vel (world)
         action  float32 (T, 4)        [forward, left, up, yaw_rate]; action[t] moves frame t -> t+1
         collision, clearance (T,)     per step
