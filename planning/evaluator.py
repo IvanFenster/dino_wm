@@ -129,7 +129,15 @@ class PlanEvaluator:  # evaluator for planning
 
         # plot trajs
         if self.wm.decoder is not None:
-            i_visuals = self.wm.decode_obs(i_z_obses)[0]["visual"]
+            # [ARPL-WM patch] decode in chunks of 5, without gradients, to avoid CUDA OOM on a 16 GB T4.
+            # Visualization only: does not change planning or the success metric.
+            torch.cuda.empty_cache()
+            _chunks = []
+            with torch.no_grad():
+                for _s in range(0, i_z_obses["visual"].shape[0], 5):
+                    _part = {k: v[_s:_s + 5] for k, v in i_z_obses.items()}
+                    _chunks.append(self.wm.decode_obs(_part)[0]["visual"])
+            i_visuals = torch.cat(_chunks, dim=0)
             i_visuals = self._mask_traj(
                 i_visuals, action_len + 1
             )  # we have action_len + 1 states

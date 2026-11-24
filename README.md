@@ -1,4 +1,7 @@
 # **DINO-WM**: World Models on Pre-trained Visual Features enable Zero-shot Planning
+
+> **ARPL fork:** for this fork's changes, Savio job scripts and results so far, see [ARPL_NOTES.md](ARPL_NOTES.md).
+
 [[Paper]](https://arxiv.org/abs/2411.04983) [[Code]]() [[Data]](https://osf.io/bmw48/?view_only=a56a296ce3b24cceaf408383a175ce28) [[Project Website]](https://dino-wm.github.io/) 
 
 [Gaoyue Zhou](https://gaoyuezhou.github.io/), [Hengkai Pan](https://hengkaipan.github.io/), [Yann LeCun](https://yann.lecun.com/) and [Lerrel Pinto](https://www.lerrelpinto.com/), New York University, Meta AI

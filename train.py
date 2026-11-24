@@ -12,6 +12,13 @@ from tqdm import tqdm
 from omegaconf import OmegaConf, open_dict
 from einops import rearrange
 from accelerate import Accelerator
+# [ARPL-WM patch] fp16: optional mixed precision for the training step only (ARPL_AMP=1). Validation stays fp32.
+_ARPL_AMP = os.environ.get("ARPL_AMP", "0") == "1"
+def _arpl_opt_step(trainer, opt):
+    if _ARPL_AMP:
+        trainer._arpl_scaler.step(getattr(opt, "optimizer", opt))
+    else:
+        opt.step()
 from torchvision import utils
 import torch.distributed as dist
 from pathlib import Path
@@ -217,20 +224,22 @@ class Trainer:
             for param in self.encoder.parameters():
                 param.requires_grad = False
 
-        self.proprio_encoder = hydra.utils.instantiate(
-            self.cfg.proprio_encoder,
-            in_chans=self.datasets["train"].proprio_dim,
-            emb_dim=self.cfg.proprio_emb_dim,
-        )
+        if self.proprio_encoder is None:  # [ARPL-WM patch] resume: keep the encoder loaded from the checkpoint
+            self.proprio_encoder = hydra.utils.instantiate(
+                self.cfg.proprio_encoder,
+                in_chans=self.datasets["train"].proprio_dim,
+                emb_dim=self.cfg.proprio_emb_dim,
+            )
         proprio_emb_dim = self.proprio_encoder.emb_dim
         print(f"Proprio encoder type: {type(self.proprio_encoder)}")
         self.proprio_encoder = self.accelerator.prepare(self.proprio_encoder)
 
-        self.action_encoder = hydra.utils.instantiate(
-            self.cfg.action_encoder,
-            in_chans=self.datasets["train"].action_dim,
-            emb_dim=self.cfg.action_emb_dim,
-        )
+        if self.action_encoder is None:  # [ARPL-WM patch] resume: keep the encoder loaded from the checkpoint
+            self.action_encoder = hydra.utils.instantiate(
+                self.cfg.action_encoder,
+                in_chans=self.datasets["train"].action_dim,
+                emb_dim=self.cfg.action_emb_dim,
+            )
         action_emb_dim = self.action_encoder.emb_dim
         print(f"Action encoder type: {type(self.action_encoder)}")
 
@@ -440,15 +449,19 @@ class Trainer:
         return logs
 
     def train(self):
+        if _ARPL_AMP and not hasattr(self, "_arpl_scaler"):  # [ARPL-WM patch] fp16
+            self._arpl_scaler = torch.cuda.amp.GradScaler()
+            log.info("[ARPL-WM] fp16 mixed precision ON for training")
         for i, data in enumerate(
             tqdm(self.dataloaders["train"], desc=f"Epoch {self.epoch} Train")
         ):
             obs, act, state = data
             plot = i == 0  # only plot from the first batch
             self.model.train()
-            z_out, visual_out, visual_reconstructed, loss, loss_components = self.model(
-                obs, act
-            )
+            with torch.autocast("cuda", dtype=torch.float16, enabled=_ARPL_AMP):  # [ARPL-WM patch] fp16
+                z_out, visual_out, visual_reconstructed, loss, loss_components = self.model(
+                    obs, act
+                )
 
             self.encoder_optimizer.zero_grad()
             if self.cfg.has_decoder:
@@ -457,15 +470,20 @@ class Trainer:
                 self.predictor_optimizer.zero_grad()
                 self.action_encoder_optimizer.zero_grad()
 
-            self.accelerator.backward(loss)
+            if _ARPL_AMP:  # [ARPL-WM patch] fp16: scaled backward, so small fp16 gradients don't round to zero
+                self._arpl_scaler.scale(loss).backward()
+            else:
+                self.accelerator.backward(loss)
 
             if self.model.train_encoder:
-                self.encoder_optimizer.step()
+                _arpl_opt_step(self, self.encoder_optimizer)
             if self.cfg.has_decoder and self.model.train_decoder:
-                self.decoder_optimizer.step()
+                _arpl_opt_step(self, self.decoder_optimizer)
             if self.cfg.has_predictor and self.model.train_predictor:
-                self.predictor_optimizer.step()
-                self.action_encoder_optimizer.step()
+                _arpl_opt_step(self, self.predictor_optimizer)
+                _arpl_opt_step(self, self.action_encoder_optimizer)
+            if _ARPL_AMP:
+                self._arpl_scaler.update()
 
             loss = self.accelerator.gather_for_metrics(loss).mean()
 
@@ -534,6 +552,7 @@ class Trainer:
             loss_components = {f"train_{k}": [v] for k, v in loss_components.items()}
             self.logs_update(loss_components)
 
+    @torch.no_grad()  # [ARPL-WM patch] validation never calls backward; without this it ran out of GPU memory on a 15 GB T4
     def val(self):
         self.model.eval()
         if len(self.train_traj_dset) > 0 and self.cfg.has_predictor:
@@ -740,6 +759,13 @@ class Trainer:
         log.info(f"Epoch {self.epoch}  Training loss: {epoch_log['train_loss']:.4f}  \
                 Validation loss: {epoch_log['val_loss']:.4f}")
 
+        if self.accelerator.is_main_process:  # [ARPL-WM patch] epochlog: one line per epoch, file closed immediately
+            _new_file = not os.path.exists("epoch_losses.csv")
+            with open("epoch_losses.csv", "a") as _fh:
+                if _new_file:
+                    _fh.write(",".join(epoch_log.keys()) + "\n")
+                _fh.write(",".join(f"{float(v):.6f}" for v in epoch_log.values()) + "\n")
+                _fh.flush(); os.fsync(_fh.fileno())
         if self.accelerator.is_main_process:
             self.wandb_run.log(epoch_log)
         self.epoch_log = OrderedDict()
