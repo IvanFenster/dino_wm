@@ -51,7 +51,7 @@ Every job writes a `run_*.txt` (git commit, Slurm job, GPU, versions, exact comm
 | CEM rolls out candidates in chunks | `planning/cem.py` | `ARPL_CEM_CHUNK` (default 50) | scores match to 2e-7, same top-30 | new |
 | fp16 mixed precision, training step only | `train.py` | `ARPL_AMP=1` | losses identical to 4 decimals; 2.2x faster | new |
 | Fused attention (`scaled_dot_product_attention`) | `models/vit.py` | `ARPL_SDPA=1` | max diff 1.9e-6 fp32, no future-frame leak (`scripts/check_equivalence.py`); 1.7x faster | new |
-| Resume keeps the loaded action / proprio encoders | `train.py` | always | upstream bug: they were re-created randomly on resume. Epoch-3 retrain: val 0.0093 (bug) vs 0.0090 (fixed) | new |
+| Resume keeps the loaded action / proprio encoders | `train.py` | always | upstream bug: they were re-created randomly on resume. Epoch-3 retrain from epoch 2: val 0.0090 with the bug vs 0.0093 with the fix (train loss 0.0145 vs 0.0123), so the damage was gone within one epoch | new |
 | `epoch_losses.csv` per run | `train.py` | always | logging only | new |
 | Run logger, validation script, DINOv2 weights from Hugging Face, depth pilot, Slurm jobs | `scripts/`, `slurm/`, `setup/` | new files | see each file's header | new |
 
@@ -79,8 +79,10 @@ The pipeline works end to end, but training had barely started (every variant is
 
 ## Not verified yet on Savio
 
+`scripts/val_ckpt.py` was verified on Colab: with the resume fix it reproduces epoch 3's 0.0090 (and recomputed the unlogged epoch 2 as 0.0104). Before the fix it gave 0.0749, because reloading replaced the action and proprio encoders with random ones; that is how the resume bug was found.
+
+
 - `setup/savio_setup.sh` and all `slurm/*.sbatch` files (written for Savio, not run there yet).
-- `scripts/val_ckpt.py`: its only saved run (2026-11-10) printed 0.0749 for epoch 3 instead of 0.0090, most likely because it predates the resume fix. Re-check epoch 3 first.
 - `scripts/depth_pilot.py` now loads the pinned DINOv2 commit instead of the latest; DeFM may need a newer Python than the dino_wm env (3.9).
 - fp16 check 3 in `scripts/check_equivalence.py` needs a GPU (`gpu_test.sbatch` runs it).
 
