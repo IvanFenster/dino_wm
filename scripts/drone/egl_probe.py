@@ -27,8 +27,13 @@ from genesis.ext.pyrender.platforms import egl
 dev = os.environ.get("EGL_DEVICE_ID")
 p = egl.EGLPlatform(64, 64, None if dev is None else int(dev))
 p.init_context(); p.make_current()
-from OpenGL import GL
-print("OK renderer:", GL.glGetString(GL.GL_RENDERER).decode(), "| EGL devices listed:", len(egl.query_devices()))
+from OpenGL import GL, platform
+libs = {k: getattr(getattr(platform.PLATFORM, k, None), "_name", None) for k in ("GL", "EGL")}
+r = GL.glGetString(GL.GL_RENDERER)
+print("libs:", libs, flush=True)
+if r is None:
+    raise RuntimeError(f"context made but GL calls reach no driver (glGetString is None); PyOpenGL libs {libs}")
+print("OK renderer:", r.decode(), "| EGL devices listed:", len(egl.query_devices()), "| libs:", libs)
 """ % REPO
 
 
